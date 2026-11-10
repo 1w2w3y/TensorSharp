@@ -137,6 +137,8 @@ namespace TensorSharp.Runtime.Logging
         public static readonly EventId VideoGenerateCompleted = new(1641, nameof(VideoGenerateCompleted));
         public static readonly EventId VideoGenerateRejected = new(1642, nameof(VideoGenerateRejected));
         public static readonly EventId VideoGeneratePhase = new(1643, nameof(VideoGeneratePhase));
+        // One line per finished phase (and stage) of a picture, with its duration.
+        public static readonly EventId ImageGeneratePhase = new(1644, nameof(ImageGeneratePhase));
 
         // CLI --------------------------------------------------------------
         public static readonly EventId CliStarted = new(1700, nameof(CliStarted));

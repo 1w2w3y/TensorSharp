@@ -2851,7 +2851,17 @@ namespace tsg
                 return e == nullptr ? -1 : e[0] == '0' ? 0 : 1;
             }();
             if (setting == 0 || (setting < 0 && !prefer_cuda)) return false;
-            static const bool available = tsg_cudnn_conv2d_available();
+            // Reached only by a graph that wants cuDNN, so say once when it is not there:
+            // the fallback is correct but several times slower, and nothing else shows it.
+            static const bool available = []{
+                const bool found = tsg_cudnn_conv2d_available();
+                if (!found)
+                    std::fprintf(stderr,
+                        "tsg_cudnn: cuDNN 9 was not found or could not be used; VAE convolutions run as im2col+GEMM "
+                        "instead, several times slower. Set TS_CUDNN_DIR to a cuDNN 9 directory "
+                        "(TS_VAE_CUDNN_CONV=0 turns the cuDNN path and this message off).\n");
+                return found;
+            }();
             return available;
         }
     #endif

@@ -1722,6 +1722,8 @@ namespace TensorSharp.Chat
                         var inputs = imageBytesList.ConvertAll(bytes => DecodeRequestImage(bytes, "image"));
                         ValidateImageMaskGeometry(p, inputs);
                         ApplyLoras(model, loras, logger, "Image request");
+                        telemetry.Logger = logger;
+                        p.OnTiming = telemetry.RecordTiming;
                         p.OnStep = (_, total, _) =>
                         {
                             cancellationToken.ThrowIfCancellationRequested();
@@ -1982,6 +1984,8 @@ namespace TensorSharp.Chat
                         ValidateImageMaskGeometry(p, inputs);
                         ApplyLoras(editModel, loras, logger, "Image request");
                         p.PreviewCount = previewCount;
+                        imageTelemetry.Logger = logger;
+                        p.OnTiming = imageTelemetry.RecordTiming;
                         p.OnStep = (step, total, preview) =>
                             {
                                 if (ct.IsCancellationRequested) throw new OperationCanceledException(ct);

@@ -137,9 +137,12 @@ bool siblings_present(const std::string& dir)
 // cuDNN 9 is the only major with CUDA 13 builds.
 const char* const kCudnnNames[] = { "cudnn64_9.dll" };
 const char kSep = '\\';
-// The Windows redistributable puts the DLLs in bin\x64; a system install or a
-// hand-assembled directory may use bin\ or the root.
-const char* const kLibSubdirs[] = { "bin\\x64", "bin", "" };
+// The Windows redistributable puts the DLLs in bin\x64, and eng/fetch-cudnn puts the
+// ARM64 redistributable in bin\arm64 (the SDPA module searches the same list); a
+// system install or a hand-assembled directory may use bin\ or the root. A
+// directory missing from this list is not an error anywhere: the convolutions
+// quietly take the im2col fallback.
+const char* const kLibSubdirs[] = { "bin\\x64", "bin\\arm64", "bin", "" };
 #else
 using LibHandle = void*;
 void prepend_to_path(const std::string&) { }

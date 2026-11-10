@@ -2396,6 +2396,7 @@ namespace TensorSharp.Cli
                 CliTelemetry.BackendOf(model), generate: inputs.Count == 0);
             image.SetRequest(prompt, p, inputs.Count);
             p.OnStep = (_, total, _) => image.RecordStep(total);
+            p.OnTiming = image.RecordTiming;
             var sw = Stopwatch.StartNew();
             TensorSharp.Models.QwenImage.RgbImage output;
             try

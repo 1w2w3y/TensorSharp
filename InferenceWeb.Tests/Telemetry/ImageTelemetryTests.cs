@@ -187,6 +187,60 @@ public sealed class ImageTelemetryTests : IDisposable
         Assert.Null(span.GetTagItem(TelemetryAttributes.ImagePrompt));
     }
 
+    [Fact]
+    public void EachPhaseStageAndStepOfAPictureIsTimed()
+    {
+        const string PhaseDuration = "tensorsharp.image.phase.duration";
+        const string StepDuration = "tensorsharp.image.denoise.step.duration";
+        string model = NewModel();
+        using (var image = ImageGenerationTelemetry.Start(model, "ggml_cuda", generate: true))
+        {
+            image.RecordTiming(new QwenImageTiming(QwenImageTiming.PhaseTextEncode, QwenImageTiming.StageLoad, 0, 8, TimeSpan.FromSeconds(2)));
+            image.RecordTiming(new QwenImageTiming(QwenImageTiming.PhaseTextEncode, null, 0, 8, TimeSpan.FromSeconds(3)));
+            for (int step = 1; step <= 8; step++)
+                image.RecordTiming(new QwenImageTiming(QwenImageTiming.PhaseDenoise, null, step, 8, TimeSpan.FromSeconds(step == 1 ? 5 : 2)));
+            image.RecordTiming(new QwenImageTiming(QwenImageTiming.PhaseDenoise, null, 0, 8, TimeSpan.FromSeconds(19)));
+            image.RecordTiming(new QwenImageTiming(QwenImageTiming.PhaseVaeDecode, null, 0, 8, TimeSpan.FromSeconds(30)));
+            image.SetResult(768, 1376);
+        }
+
+        var root = Span(model);
+        // The steps count as RecordStep: the picture's step count is on its span.
+        Assert.Equal(8, root.GetTagItem(TelemetryAttributes.ImageSteps));
+        List<Activity> children;
+        lock (_gate) children = _stopped.Where(a => a.ParentSpanId == root.SpanId).ToList();
+        Assert.Equal(new[] { "text-encode load", "text-encode", "denoise", "vae-decode" }, children.Select(c => c.DisplayName));
+        var load = children[0];
+        Assert.Equal("text-encode", load.GetTagItem(TelemetryAttributes.ImagePhase));
+        Assert.Equal("load", load.GetTagItem(TelemetryAttributes.ImageStage));
+        Assert.Equal(2, load.Duration.TotalSeconds, 3);
+        var denoise = children[2];
+        Assert.Null(denoise.GetTagItem(TelemetryAttributes.ImageStage));
+        Assert.Equal(19, denoise.Duration.TotalSeconds, 3);
+        Assert.Equal(Enumerable.Range(1, 8), denoise.Events.Select(e => (int)e.Tags.Single(t => t.Key == TelemetryAttributes.ImageStep).Value!));
+        Assert.Empty(children[3].Events);
+
+        var phases = _measurements.Where(m => m.Instrument == PhaseDuration && Equals(m.Tags[TelemetryAttributes.GenAiRequestModel], model)).ToList();
+        Assert.Equal(new[] { 2.0, 3.0, 19.0, 30.0 }, phases.Select(m => m.Value));
+        Assert.Equal("load", phases[0].Tags[TelemetryAttributes.ImageStage]);
+        Assert.False(phases[1].Tags.ContainsKey(TelemetryAttributes.ImageStage));
+        Assert.Equal("vae-decode", phases[3].Tags[TelemetryAttributes.ImagePhase]);
+        Assert.Equal("ggml_cuda", phases[3].Tags[TelemetryAttributes.Backend]);
+        var steps = _measurements.Where(m => m.Instrument == StepDuration && Equals(m.Tags[TelemetryAttributes.GenAiRequestModel], model)).ToList();
+        Assert.Equal(new[] { 5.0, 2, 2, 2, 2, 2, 2, 2 }, steps.Select(m => m.Value));
+    }
+
+    [Fact]
+    public void ATimingAfterThePictureEndedIsIgnored()
+    {
+        string model = NewModel();
+        var image = ImageGenerationTelemetry.Start(model, null, generate: true);
+        image.Dispose();
+        image.RecordTiming(new QwenImageTiming(QwenImageTiming.PhaseVaeDecode, null, 0, 8, TimeSpan.FromSeconds(1)));
+        Assert.DoesNotContain(_measurements, m => m.Instrument == "tensorsharp.image.phase.duration"
+            && Equals(m.Tags[TelemetryAttributes.GenAiRequestModel], model));
+    }
+
     private static string NewModel() => $"qwen-image-test-{Guid.NewGuid():N}.gguf";
 
     private Activity Span(string model)

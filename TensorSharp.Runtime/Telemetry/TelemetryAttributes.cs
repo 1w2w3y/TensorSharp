@@ -187,6 +187,14 @@ namespace TensorSharp.Runtime.Telemetry
         public const string ImageSteps = "tensorsharp.image.steps";
         public const string ImageCfg = "tensorsharp.image.cfg";
         public const string ImageSeed = "tensorsharp.image.seed";
+        /// <summary>The part of a picture a span or sample covers: <c>vae-encode</c>, <c>text-encode</c>, <c>denoise</c>, <c>vae-decode</c>.</summary>
+        public const string ImagePhase = "tensorsharp.image.phase";
+        /// <summary>A named part of a phase, such as <c>load</c>; absent on the phase itself.</summary>
+        public const string ImageStage = "tensorsharp.image.stage";
+        /// <summary>The 1-based denoising step of a step event.</summary>
+        public const string ImageStep = "tensorsharp.image.step";
+        /// <summary>Seconds a denoising step took, on a step event.</summary>
+        public const string ImageStepDuration = "tensorsharp.image.step.duration";
         /// <summary>The number of reference pictures an edit was given.</summary>
         public const string ImageReferences = "tensorsharp.image.references";
         /// <summary>The image prompt; only with content capture on.</summary>

@@ -115,5 +115,28 @@ namespace TensorSharp.Models.QwenImage
         /// Masked previews are composited back to the original canvas with exact protected pixels.
         /// </summary>
         public int PreviewCount { get; set; } = 0;
+
+        /// <summary>
+        /// Optional callback for how long each part of the picture took, invoked on the
+        /// generating thread as the part ends: once per phase, once per named stage inside a
+        /// phase, and once per denoising step. See <see cref="QwenImageTiming"/>.
+        /// </summary>
+        public Action<QwenImageTiming> OnTiming { get; set; }
+    }
+
+    /// <summary>
+    /// How long one part of a picture took. <see cref="Phase"/> is one of the
+    /// <c>Phase*</c> names. A whole phase has no <see cref="Stage"/> and a zero
+    /// <see cref="Step"/>; a stage (<see cref="StageLoad"/>: weights opened and bound for this
+    /// request) is part of its phase's time; a denoising step carries its 1-based
+    /// <see cref="Step"/> of <see cref="TotalSteps"/> and is part of the denoise phase.
+    /// </summary>
+    public readonly record struct QwenImageTiming(string Phase, string Stage, int Step, int TotalSteps, TimeSpan Duration)
+    {
+        public const string PhaseVaeEncode = "vae-encode";
+        public const string PhaseTextEncode = "text-encode";
+        public const string PhaseDenoise = "denoise";
+        public const string PhaseVaeDecode = "vae-decode";
+        public const string StageLoad = "load";
     }
 }

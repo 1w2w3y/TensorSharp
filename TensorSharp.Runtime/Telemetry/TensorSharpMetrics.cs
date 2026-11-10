@@ -154,6 +154,16 @@ namespace TensorSharp.Runtime.Telemetry
             "Time to generate one image request, by outcome.",
             advice: new InstrumentAdvice<double> { HistogramBucketBoundaries = s_longBuckets });
 
+        public static readonly Histogram<double> ImagePhaseDuration = M.CreateHistogram(
+            "tensorsharp.image.phase.duration", "s",
+            "Time in one phase (and stage) of a picture: vae-encode, text-encode, denoise, vae-decode.",
+            advice: new InstrumentAdvice<double> { HistogramBucketBoundaries = s_longBuckets });
+
+        public static readonly Histogram<double> ImageDenoiseStepDuration = M.CreateHistogram(
+            "tensorsharp.image.denoise.step.duration", "s",
+            "Time per denoising step of a picture, by model.",
+            advice: new InstrumentAdvice<double> { HistogramBucketBoundaries = s_longBuckets });
+
         // Observable --------------------------------------------------------------------
 
         private static readonly ConcurrentDictionary<InferenceEngine, string> s_engines = new();

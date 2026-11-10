@@ -58,11 +58,24 @@ namespace TensorSharp.Models.QwenImage
             ulong noiseStream = request.NoiseStream;
             var total = Stopwatch.StartNew();
             var phase = Stopwatch.StartNew();
-            void Phase(string name)
+            // `id` is the phase's QwenImageTiming name; the console line keeps its own wording.
+            void Phase(string name, string id)
             {
-                Console.WriteLine($"  [qwen21-timing] {name}: {phase.Elapsed.TotalMilliseconds:F0}ms");
+                TimeSpan elapsed = phase.Elapsed;
+                Console.WriteLine($"  [qwen21-timing] {name}: {elapsed.TotalMilliseconds:F0}ms");
                 if (ReportMemory) Console.WriteLine($"  [qwen21-memory] after {name}: {MemoryLine()}");
+                p.OnTiming?.Invoke(new QwenImageTiming(id, null, 0, steps, elapsed));
                 phase.Restart();
+            }
+            // Runs `load` (weights opened and bound for this request) and reports it as the
+            // current phase's load stage; its time stays part of the phase.
+            T Load<T>(string id, Func<T> load)
+            {
+                var timer = Stopwatch.StartNew();
+                T loaded = load();
+                Console.WriteLine($"  [qwen21-timing] {id} load: {timer.Elapsed.TotalMilliseconds:F0}ms");
+                p.OnTiming?.Invoke(new QwenImageTiming(id, QwenImageTiming.StageLoad, 0, steps, timer.Elapsed));
+                return loaded;
             }
             string stream = noiseStream != 0 ? $" (edit noise stream {noiseStream:x16})" : "";
             Console.WriteLine($"Qwen-Image-2.1{(_model.Variant == QwenImageVariant.Turbo ? " Turbo" : "")}: {width}x{height}, " +
@@ -95,6 +108,7 @@ namespace TensorSharp.Models.QwenImage
                 var refWidths = new int[inputs.Length];
                 float[] sourceTokens = null;
                 float[] latentMask = mask?.LatentWeights(w, h);
+                if (inputs.Length > 0 && _vae == null) Load(QwenImageTiming.PhaseVaeEncode, () => Vae);
                 for (int i = 0; i < inputs.Length; i++)
                 {
                     // Vision and VAE must see the SAME geometry: one image slot expands
@@ -115,20 +129,21 @@ namespace TensorSharp.Models.QwenImage
                     var encodedSource = Vae.Encode(ImageIO.Resize(mask.Reference, width, height));
                     sourceTokens = ToTokens(encodedSource.Data, encodedSource.Height, encodedSource.Width);
                 }
-                if (refs.Length > 0) Phase("VAE encode");
+                if (refs.Length > 0) Phase("VAE encode", QwenImageTiming.PhaseVaeEncode);
 
                 float[] positive, negative = null;
                 int positiveLength, negativeLength = 0;
                 int[] positiveSlots, negativeSlots = null;
                 // Encoder residency ends before the DiT starts. This also bounds
                 // GPU memory on discrete devices; no encoder is needed during denoising.
-                using (var conditioner = new QwenImage21Conditioner(_model.TePath, _model.MmprojPath, _model.Backend))
+                using (var conditioner = Load(QwenImageTiming.PhaseTextEncode,
+                    () => new QwenImage21Conditioner(_model.TePath, _model.MmprojPath, _model.Backend)))
                 {
                     (positive, positiveLength, positiveSlots) = conditioner.EncodePrompt(prompt, refs);
                     if (cfg > 1f)
                         (negative, negativeLength, negativeSlots) = conditioner.EncodePrompt(p.NegativePrompt ?? "", refs);
                 }
-                Phase("text and vision encode");
+                Phase("text and vision encode", QwenImageTiming.PhaseTextEncode);
                 _model.ReleaseComputeBuffers();
                 // On the cpu backend the conditioner's packed vision weights and working buffers
                 // are managed arrays (GBs for an edit). Nothing during the denoise allocates
@@ -175,6 +190,7 @@ namespace TensorSharp.Models.QwenImage
                         }
                         string path = positiveCache == null ? "" : $" prefix={positiveCache.LastPath.ToString().ToLowerInvariant()}";
                         Console.WriteLine($"  [qwen21-step] {step + 1}/{steps}: {timer.Elapsed.TotalSeconds:F3}s sigma={sigmas[step]:F6}{path}");
+                        p.OnTiming?.Invoke(new QwenImageTiming(QwenImageTiming.PhaseDenoise, null, step + 1, steps, timer.Elapsed));
                         RgbImage preview = null;
                         int interval = p.PreviewCount > 0 ? Math.Max(1, (steps + p.PreviewCount) / (p.PreviewCount + 1)) : 0;
                         if (p.OnStep != null && interval > 0 && step + 1 < steps && (step + 1) % interval == 0)
@@ -204,15 +220,16 @@ namespace TensorSharp.Models.QwenImage
                     positiveCache?.Dispose();
                     negativeCache?.Dispose();
                 }
-                Phase("denoise");
+                Phase("denoise", QwenImageTiming.PhaseDenoise);
                 // Denoising is finished; release resident DiT weights (on the cpu
                 // backend, the transformer's activation scratch) before allocating the
                 // much larger full-resolution VAE feature maps.
                 _model.ReleaseComputeBuffers();
                 _dit?.ReleaseScratch();
+                if (_vae == null) Load(QwenImageTiming.PhaseVaeDecode, () => Vae);
                 var output = Vae.Decode(new VaeLatent(64, h, w, ToChannels(latents, h, w)));
                 output = FinishOutput(output, mask, geometry.Output);
-                Phase("VAE decode");
+                Phase("VAE decode", QwenImageTiming.PhaseVaeDecode);
                 Console.WriteLine($"  [qwen21-timing] total: {total.Elapsed.TotalSeconds:F3}s");
                 return output;
             }

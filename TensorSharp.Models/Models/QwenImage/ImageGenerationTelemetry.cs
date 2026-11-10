@@ -9,8 +9,11 @@
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the BSD-3-Clause License for more details.
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
+using Microsoft.Extensions.Logging;
+using TensorSharp.Runtime.Logging;
 using TensorSharp.Runtime.Telemetry;
 
 namespace TensorSharp.Models.QwenImage
@@ -19,8 +22,8 @@ namespace TensorSharp.Models.QwenImage
     /// The <c>generate_image &lt;model&gt;</c> span and the
     /// <c>tensorsharp.image.generation.duration</c> sample of one picture, generated or edited,
     /// from the moment it is accepted until its PNG is saved or it is refused. The server's image
-    /// routes and the CLI both use it, so a dashboard sees their pictures alike. No phase spans:
-    /// Qwen-Image reports only its steps.
+    /// routes and the CLI both use it, so a dashboard sees their pictures alike. The pipeline's
+    /// timings (<see cref="RecordTiming"/>) add a child span and a duration sample per phase.
     ///
     /// <para>
     /// What the request asked for goes on the span once it is read (<see cref="SetRequest"/>),
@@ -46,6 +49,8 @@ namespace TensorSharp.Models.QwenImage
         private string? _errorType;
         private int _steps;
         private int _disposed;
+        // The steps of the denoise phase in progress; they go on its span when it ends.
+        private readonly List<ActivityEvent> _stepEvents = new();
 
         private ImageGenerationTelemetry(string model, string? backend, bool generate)
         {
@@ -106,6 +111,81 @@ namespace TensorSharp.Models.QwenImage
         public void RecordStep(int total)
         {
             if (total > 0) Volatile.Write(ref _steps, total);
+        }
+
+        /// <summary>
+        /// Where the per-phase log lines go (<see cref="LogEventIds.ImageGeneratePhase"/>); null
+        /// writes none. Set before the picture starts.
+        /// </summary>
+        public ILogger? Logger { get; set; }
+
+        /// <summary>
+        /// One finished part of the picture, as <see cref="QwenImageParams.OnTiming"/> reports it.
+        /// A phase or a stage becomes a child span that ends now and a
+        /// <c>tensorsharp.image.phase.duration</c> sample; a phase also writes one log line. A
+        /// denoising step becomes a <c>tensorsharp.image.denoise.step.duration</c> sample and an
+        /// event on the denoise span, and counts as <see cref="RecordStep"/>.
+        /// </summary>
+        public void RecordTiming(QwenImageTiming timing)
+        {
+            if (string.IsNullOrEmpty(timing.Phase) || Volatile.Read(ref _disposed) != 0)
+                return;
+            double seconds = Math.Max(0, timing.Duration.TotalSeconds);
+            if (timing.Step > 0)
+            {
+                RecordStep(timing.TotalSteps);
+                TensorSharpMetrics.ImageDenoiseStepDuration.Record(seconds, MetricTags());
+                if (_activity is { IsAllDataRequested: true })
+                    _stepEvents.Add(new ActivityEvent("denoise step", DateTimeOffset.UtcNow, new ActivityTagsCollection
+                    {
+                        { TelemetryAttributes.ImageStep, timing.Step },
+                        { TelemetryAttributes.ImageStepDuration, seconds },
+                    }));
+                return;
+            }
+
+            var tags = MetricTags();
+            tags.Add(TelemetryAttributes.ImagePhase, timing.Phase);
+            if (timing.Stage != null) tags.Add(TelemetryAttributes.ImageStage, timing.Stage);
+            TensorSharpMetrics.ImagePhaseDuration.Record(seconds, tags);
+
+            if (_activity != null)
+            {
+                DateTimeOffset end = DateTimeOffset.UtcNow;
+                string name = timing.Stage == null ? timing.Phase : timing.Phase + " " + timing.Stage;
+                var child = TensorSharpTelemetry.Media.StartActivity(name, ActivityKind.Internal, _activity.Context,
+                    startTime: end - TimeSpan.FromSeconds(seconds));
+                if (child != null)
+                {
+                    if (child.IsAllDataRequested)
+                    {
+                        child.SetTag(TelemetryAttributes.MediaKind, MediaKindImage);
+                        child.SetTag(TelemetryAttributes.ImagePhase, timing.Phase);
+                        if (timing.Stage != null) child.SetTag(TelemetryAttributes.ImageStage, timing.Stage);
+                        if (timing.Stage == null && timing.Phase == QwenImageTiming.PhaseDenoise)
+                            foreach (var step in _stepEvents) child.AddEvent(step);
+                    }
+                    child.SetEndTime(end.UtcDateTime);
+                    child.Stop();
+                }
+            }
+            if (timing.Stage == null)
+            {
+                if (timing.Phase == QwenImageTiming.PhaseDenoise) _stepEvents.Clear();
+                Logger?.LogInformation(LogEventIds.ImageGeneratePhase,
+                    "image.phase {Phase} model={Model} seconds={Seconds:F3}", timing.Phase, _model, seconds);
+            }
+        }
+
+        private System.Diagnostics.TagList MetricTags()
+        {
+            var tags = new System.Diagnostics.TagList
+            {
+                { TelemetryAttributes.GenAiRequestModel, _model },
+                { TelemetryAttributes.ImageMode, _mode },
+            };
+            if (_backend != null) tags.Add(TelemetryAttributes.Backend, _backend);
+            return tags;
         }
 
         /// <summary>The picture was made at <paramref name="width"/> x <paramref name="height"/>.</summary>
